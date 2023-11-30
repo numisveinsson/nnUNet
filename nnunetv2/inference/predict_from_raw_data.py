@@ -17,6 +17,9 @@ from torch._dynamo import OptimizedModule
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
+import sys
+sys.path.append("/global/scratch/users/numi/SeqSeg/nnUNet/")
+
 import nnunetv2
 from nnunetv2.configuration import default_num_processes
 from nnunetv2.inference.data_iterators import PreprocessAdapterFromNpy, preprocessing_iterator_fromfiles, \
