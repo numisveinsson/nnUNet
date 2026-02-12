@@ -33,9 +33,9 @@ class SoftDiceLoss(nn.Module):
         tp, fp, fn, _ = get_tp_fp_fn_tn(x, y, axes, loss_mask, False)
 
         if self.ddp and self.batch_dice:
-            tp = AllGatherGrad.apply(tp).sum(0)
-            fp = AllGatherGrad.apply(fp).sum(0)
-            fn = AllGatherGrad.apply(fn).sum(0)
+            tp = AllGatherGrad.apply(tp).sum(0, dtype=torch.float32)
+            fp = AllGatherGrad.apply(fp).sum(0, dtype=torch.float32)
+            fn = AllGatherGrad.apply(fn).sum(0, dtype=torch.float32)
 
         if self.clip_tp is not None:
             tp = torch.clip(tp, min=self.clip_tp , max=None)
@@ -70,47 +70,50 @@ class MemoryEfficientSoftDiceLoss(nn.Module):
         self.ddp = ddp
 
     def forward(self, x, y, loss_mask=None):
-        shp_x, shp_y = x.shape, y.shape
-
         if self.apply_nonlin is not None:
             x = self.apply_nonlin(x)
 
-        if not self.do_bg:
-            x = x[:, 1:]
-
         # make everything shape (b, c)
-        axes = list(range(2, len(shp_x)))
+        axes = tuple(range(2, x.ndim))
 
         with torch.no_grad():
-            if len(shp_x) != len(shp_y):
-                y = y.view((shp_y[0], 1, *shp_y[1:]))
+            if x.ndim != y.ndim:
+                y = y.view((y.shape[0], 1, *y.shape[1:]))
 
-            if all([i == j for i, j in zip(shp_x, shp_y)]):
+            if x.shape == y.shape:
                 # if this is the case then gt is probably already a one hot encoding
-                y_onehot = y
+                y_onehot = y.to(torch.float32)
             else:
-                gt = y.long()
-                y_onehot = torch.zeros(shp_x, device=x.device, dtype=torch.bool)
-                y_onehot.scatter_(1, gt, 1)
+                y_onehot = torch.zeros(x.shape, device=x.device, dtype=torch.float32)
+                y_onehot.scatter_(1, y.long(), 1)
 
             if not self.do_bg:
                 y_onehot = y_onehot[:, 1:]
-            sum_gt = y_onehot.sum(axes) if loss_mask is None else (y_onehot * loss_mask).sum(axes)
 
-        intersect = (x * y_onehot).sum(axes) if loss_mask is None else (x * y_onehot * loss_mask).sum(axes)
-        sum_pred = x.sum(axes) if loss_mask is None else (x * loss_mask).sum(axes)
+            sum_gt = y_onehot.sum(axes, dtype=torch.float32) if loss_mask is None else (y_onehot * loss_mask).sum(axes, dtype=torch.float32)
 
-        if self.ddp and self.batch_dice:
-            intersect = AllGatherGrad.apply(intersect).sum(0)
-            sum_pred = AllGatherGrad.apply(sum_pred).sum(0)
-            sum_gt = AllGatherGrad.apply(sum_gt).sum(0)
+        # this one MUST be outside the with torch.no_grad(): context. Otherwise no gradients for you
+        if not self.do_bg:
+            x = x[:, 1:]
+
+        if loss_mask is None:
+            intersect = (x * y_onehot).sum(axes, dtype=torch.float32)
+            sum_pred = x.sum(axes, dtype=torch.float32)
+        else:
+            intersect = (x * y_onehot * loss_mask).sum(axes, dtype=torch.float32)
+            sum_pred = (x * loss_mask).sum(axes, dtype=torch.float32)
 
         if self.batch_dice:
-            intersect = intersect.sum(0)
-            sum_pred = sum_pred.sum(0)
-            sum_gt = sum_gt.sum(0)
+            if self.ddp:
+                intersect = AllGatherGrad.apply(intersect).sum(0, dtype=torch.float32)
+                sum_pred = AllGatherGrad.apply(sum_pred).sum(0, dtype=torch.float32)
+                sum_gt = AllGatherGrad.apply(sum_gt).sum(0, dtype=torch.float32)
 
-        dc = (2 * intersect + self.smooth) / (torch.clip(sum_gt + sum_pred + self.smooth, 1e-8))
+            intersect = intersect.sum(0, dtype=torch.float32)
+            sum_pred = sum_pred.sum(0, dtype=torch.float32)
+            sum_gt = sum_gt.sum(0, dtype=torch.float32)
+
+        dc = (2 * intersect + self.smooth) / (sum_gt + sum_pred + float(self.smooth)).clamp_min(1e-8)
 
         dc = dc.mean()
         return -dc
@@ -129,22 +132,18 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     :return:
     """
     if axes is None:
-        axes = tuple(range(2, len(net_output.size())))
-
-    shp_x = net_output.shape
-    shp_y = gt.shape
+        axes = tuple(range(2, net_output.ndim))
 
     with torch.no_grad():
-        if len(shp_x) != len(shp_y):
-            gt = gt.view((shp_y[0], 1, *shp_y[1:]))
+        if net_output.ndim != gt.ndim:
+            gt = gt.view((gt.shape[0], 1, *gt.shape[1:]))
 
-        if all([i == j for i, j in zip(net_output.shape, gt.shape)]):
+        if net_output.shape == gt.shape:
             # if this is the case then gt is probably already a one hot encoding
-            y_onehot = gt
+            y_onehot = gt.to(torch.float32)
         else:
-            gt = gt.long()
-            y_onehot = torch.zeros(shp_x, device=net_output.device)
-            y_onehot.scatter_(1, gt, 1)
+            y_onehot = torch.zeros(net_output.shape, device=net_output.device, dtype=torch.float32)
+            y_onehot.scatter_(1, gt.long(), 1)
 
     tp = net_output * y_onehot
     fp = net_output * (1 - y_onehot)
@@ -153,7 +152,7 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
 
     if mask is not None:
         with torch.no_grad():
-            mask_here = torch.tile(mask, (1, tp.shape[1], *[1 for i in range(2, len(tp.shape))]))
+            mask_here = torch.tile(mask, (1, tp.shape[1], *[1 for _ in range(2, tp.ndim)]))
         tp *= mask_here
         fp *= mask_here
         fn *= mask_here
@@ -173,10 +172,10 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
         tn = tn ** 2
 
     if len(axes) > 0:
-        tp = tp.sum(dim=axes, keepdim=False)
-        fp = fp.sum(dim=axes, keepdim=False)
-        fn = fn.sum(dim=axes, keepdim=False)
-        tn = tn.sum(dim=axes, keepdim=False)
+        tp = tp.sum(dim=axes, keepdim=False, dtype=torch.float32)
+        fp = fp.sum(dim=axes, keepdim=False, dtype=torch.float32)
+        fn = fn.sum(dim=axes, keepdim=False, dtype=torch.float32)
+        tn = tn.sum(dim=axes, keepdim=False, dtype=torch.float32)
 
     return tp, fp, fn, tn
 

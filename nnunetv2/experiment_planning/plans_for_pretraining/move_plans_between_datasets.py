@@ -1,7 +1,7 @@
 import argparse
 from typing import Union
 
-from batchgenerators.utilities.file_and_folder_operations import join, isdir, isfile, load_json, subfiles, save_json
+from batchgenerators.utilities.file_and_folder_operations import join, isdir, isfile, load_json, save_json
 
 from nnunetv2.imageio.reader_writer_registry import determine_reader_writer_from_dataset_json
 from nnunetv2.paths import nnUNet_preprocessed, nnUNet_raw
@@ -34,12 +34,13 @@ def move_plans_between_datasets(
     # we need to change data_identifier to use target_plans_identifier
     if target_plans_identifier != source_plans_identifier:
         for c in source_plans['configurations'].keys():
-            old_identifier = source_plans['configurations'][c]["data_identifier"]
-            if old_identifier.startswith(source_plans_identifier):
-                new_identifier = target_plans_identifier + old_identifier[len(source_plans_identifier):]
-            else:
-                new_identifier = target_plans_identifier + '_' + old_identifier
-            source_plans['configurations'][c]["data_identifier"] = new_identifier
+            if 'data_identifier' in source_plans['configurations'][c].keys():
+                old_identifier = source_plans['configurations'][c]["data_identifier"]
+                if old_identifier.startswith(source_plans_identifier):
+                    new_identifier = target_plans_identifier + old_identifier[len(source_plans_identifier):]
+                else:
+                    new_identifier = target_plans_identifier + '_' + old_identifier
+                source_plans['configurations'][c]["data_identifier"] = new_identifier
 
     # we need to change the reader writer class!
     target_raw_data_dir = join(nnUNet_raw, target_dataset_name)
@@ -53,6 +54,8 @@ def move_plans_between_datasets(
                                                    verbose=False)
 
     source_plans["image_reader_writer"] = rw.__name__
+    if target_plans_identifier is not None:
+        source_plans["plans_name"] = target_plans_identifier
 
     save_json(source_plans, join(nnUNet_preprocessed, target_dataset_name, target_plans_identifier + '.json'),
               sort_keys=False)

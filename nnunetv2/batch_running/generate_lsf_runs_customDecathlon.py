@@ -24,15 +24,19 @@ if __name__ == "__main__":
         2: ("3d_fullres", "2d"),
         3: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
         4: ("2d", "3d_fullres"),
+        5: ("2d", "3d_fullres"),
+        8: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
+        10: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
         17: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
-        20: ("2d", "3d_fullres"),
         24: ("2d", "3d_fullres"),
         27: ("2d", "3d_fullres"),
         38: ("2d", "3d_fullres"),
         55: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
-        64: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
-        82: ("2d", "3d_fullres"),
-        # 83: ("2d", "3d_fullres"),
+        137: ("2d", "3d_fullres"),
+        220: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
+        # 221: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
+        223: ("2d", "3d_lowres", "3d_fullres", "3d_cascade_fullres"),
+        226: ("2d", "3d_fullres"),
     }
 
     configurations_3d_fr_only = {
@@ -52,25 +56,45 @@ if __name__ == "__main__":
     }
 
     num_gpus = 1
-    exclude_hosts = "-R \"select[hname!='e230-dgx2-2']\" -R \"select[hname!='e230-dgx2-1']\" -R \"select[hname!='e230-dgx1-1']\" -R \"select[hname!='e230-dgxa100-1']\" -R \"select[hname!='e230-dgxa100-2']\" -R \"select[hname!='e230-dgxa100-3']\" -R \"select[hname!='e230-dgxa100-4']\""
-    resources = "-R \"tensorcore\""
-    gpu_requirements = f"-gpu num={num_gpus}:j_exclusive=yes:gmem=33G"
-    queue = "-q gpu-lowprio"
-    preamble = "-L /bin/bash \"source ~/load_env_cluster4.sh && "
-    train_command = 'nnUNet_results=/dkfz/cluster/gpu/checkpoints/OE0441/isensee/nnUNet_results_remake_release nnUNetv2_train'
+    exclude_hosts = "-R \"select[hname!='e230-dgx2-2']\" -R \"select[hname!='e230-dgx2-1']\""
+    resources = ""
+    gpu_requirements = f"-gpu num={num_gpus}:j_exclusive=yes:gmem=23G"#gmodel=NVIDIAA100_PCIE_40GB"
+    queue = "-q gpu-pro"
+    preamble = "\". /home/isensee/env_loading_scripts/continuous_performance_monitoring/load_env_torch210.sh && " # -L /bin/bash
+    train_command = 'nnUNetv2_train'
+
 
     folds = (0, )
     # use_this = configurations_2d_only
-    use_this = merge(configurations_3d_fr_only, configurations_3d_lr_only)
+    use_this = configurations_3d_fr_only
     # use_this = merge(use_this, configurations_3d_c_only)
 
+    datasets = [3, 5, 8, 10, 17, 27, 55, 220, 223, 226]
+    use_this = {i: use_this[i] for i in datasets}
+
     use_these_modules = {
-        'nnUNetTrainer': ('nnUNetPlans',),
-        'nnUNetTrainerDiceCELoss_noSmooth': ('nnUNetPlans',),
+        # 'nnUNetTrainer_newSpatialAug': ('nnUNetPlans',),
+        # 'nnUNetTrainerBN': ('nnUNetPlans',),
+        # 'nnUNetTrainer_newSpatialAug_withElDef_noPref': ('nnUNetPlans',),
+        # 'nnUNetTrainer': ('nnUNetConvNextEncUNetPlans_smallks_and_shallow',),
+        # 'nnUNetTrainer_convnextenc_regularconvblock': ('nnUNetPlans_convnext', 'nnUNetConvNextEncUNetPlans_smallks_and_shallow'),
+        # 'nnUNetTrainer_newSpatialAug_withElDef2': ('nnUNetPlans',),
+        # 'nnUNetTrainer_newSpatialAug_withElDef3': ('nnUNetPlans',),
+        # 'nnUNetTrainer_newSpatialAug_noPref': ('nnUNetPlans',),
+        # 'nnUNetTrainerDiceCELoss_noSmooth': ('nnUNetPlans',),
         # 'nnUNetTrainer_DASegOrd0': ('nnUNetPlans',),
+        # 'nnUNetTrainerAdamW_WDe2': ('nnUNetPlans',),
+        # 'nnUNetTrainerUMambaBot': ('nnUNetPlans',),
+        # 'nnUNetTrainerUMambaEnc': ('nnUNetPlans',),
+        # 'nnUNetTrainer_fasterDA': ('nnUNetPlans', 'nnUNetResEncUNetLPlans'),
+        # 'nnUNetTrainer_noDummy2DDA': ('nnUNetResEncUNetMPlans', ),
+        'nnUNetTrainer': ('nnUNetResEncUNetLPlans', ),
+        # 'nnUNetTrainer_probabilisticOversampling_033': ('nnUNetResEncUNetMPlans', ),
+        # 'nnUNetTrainer_probabilisticOversampling_010': ('nnUNetResEncUNetMPlans',),
+        # BN
     }
 
-    additional_arguments = f'--disable_checkpointing -num_gpus {num_gpus}'  # ''
+    additional_arguments = f' -num_gpus {num_gpus} --disable_checkpointing'  # ''
 
     output_file = "/home/isensee/deleteme.txt"
     with open(output_file, 'w') as f:
